@@ -55,8 +55,10 @@ void WS_SysTickHandler()
 {
     static int count=0;
     
-    if(count>29)
-    //if(Cy_DMA_Channel_GetStatus(WS_DMA_HW,WS_DMA_DW_CHANNEL) == CY_DMA_INTR_CAUSE_ACTIVE_CH_DISABLED && count>29)
+    cy_en_dma_intr_cause_t dmstatus = Cy_DMA_Channel_GetStatus(WS_DMA_HW,WS_DMA_DW_CHANNEL);
+    
+    //if(count>29)
+    if(Cy_DMA_Channel_GetStatus(WS_DMA_HW,WS_DMA_DW_CHANNEL) == CY_DMA_INTR_CAUSE_ACTIVE_CH_DISABLED && count>29)
     {
         triggerWS_DMA();
         count = 0;

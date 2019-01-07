@@ -3,13 +3,13 @@
 <!--This file is machine generated and read. It is not intended to be edited by hand.-->
 <!--Due to this, there is no schema for this file.-->
 <CyGuid_2867d519-54d2-4c01-9830-c51cb08bc3dd type_name="CyDesigner.Common.ProjMgmt.Model.CyPrjMgmtWorkspaceSerialize" version="5" xml_contents_version="3" name="WS2812" persistent="WS2812.cywrk" platform="NOT_USED">
-<current_project name=".\BasicDMAWS.cydsn\BasicDMAWS.cyprj" />
+<current_project name=".\DMA_WS2812.cydsn\DMA_WS2812.cyprj" />
 <wrkspc_folders />
 <files />
 <projects>
 <v>.\Basic.cydsn\Basic.cyprj</v>
 <v>.\BasicDMA.cydsn\BasicDMA.cyprj</v>
-<v>.\BasicDMAWS.cydsn\BasicDMAWS.cyprj</v>
+<v>.\DMA_WS2812.cydsn\DMA_WS2812.cyprj</v>
 </projects>
 <workspace_id v="2c9903ea-0990-4d19-9158-89da9283acff" />
 <WriteAppVersionLastSavedWith v="4.2.0.641" />
