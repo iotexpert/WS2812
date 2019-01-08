@@ -6,12 +6,12 @@
 #define WS_ZOFFSET (1)
 #define WS_ONE3  (0b110<<24)
 #define WS_ZERO3 (0b100<<24)
-#define WS_NUM_LEDS (5)
+#define WS_NUM_PIXELS (144)
 #define WS_SPI_BIT_PER_BIT (3)
 #define WS_COLOR_PER_PIXEL (3)
 #define WS_BYTES_PER_PIXEL (WS_SPI_BIT_PER_BIT * WS_COLOR_PER_PIXEL)
 
-static uint8_t WS_frameBuffer[WS_NUM_LEDS*WS_BYTES_PER_PIXEL+WS_ZOFFSET];
+static uint8_t WS_frameBuffer[WS_NUM_PIXELS*WS_BYTES_PER_PIXEL+WS_ZOFFSET];
 
 // This is the interrupt handler for the WS DMA
 // It doesnt do anything... and is just a stub
@@ -20,16 +20,51 @@ static void WS_DMAComplete(void)
     Cy_DMA_Channel_ClearInterrupt(WS_DMA_HW, WS_DMA_DW_CHANNEL);   
 }
 
-static void ConfigureWS_DMA(void)
+// Function WS_DMAConfiguration
+// This function sets up the DMA and the descriptors
+
+#define WS_NUM_DESCRIPTORS (sizeof(WS_frameBuffer) / 256 + 1)
+static cy_stc_dma_descriptor_t WSDescriptors[WS_NUM_DESCRIPTORS];
+static void WS_DMAConfigure(void)
 {
+    // I copies this structure from the PSoC Creator Component configuration 
+    // in generated source
+    const cy_stc_dma_descriptor_config_t WS_DMA_Descriptors_config =
+    {
+    .retrigger       = CY_DMA_RETRIG_IM,
+    .interruptType   = CY_DMA_DESCR_CHAIN,
+    .triggerOutType  = CY_DMA_1ELEMENT,
+    .channelState    = CY_DMA_CHANNEL_ENABLED,
+    .triggerInType   = CY_DMA_1ELEMENT,
+    .dataSize        = CY_DMA_BYTE,
+    .srcTransferSize = CY_DMA_TRANSFER_SIZE_DATA,
+    .dstTransferSize = CY_DMA_TRANSFER_SIZE_WORD,
+    .descriptorType  = CY_DMA_1D_TRANSFER,
+    .srcAddress      = NULL,
+    .dstAddress      = NULL,
+    .srcXincrement   = 1L,
+    .dstXincrement   = 0L,
+    .xCount          = 256UL,
+    .srcYincrement   = 0L,
+    .dstYincrement   = 0L,
+    .yCount          = 1UL,
+    .nextDescriptor  = 0
+    };
+
+    for(unsigned int i=0;i<WS_NUM_DESCRIPTORS;i++)
+    {
+        Cy_DMA_Descriptor_Init(&WSDescriptors[i], &WS_DMA_Descriptors_config);
+        Cy_DMA_Descriptor_SetSrcAddress(&WSDescriptors[i], (uint8_t *)&WS_frameBuffer[i*256]);
+        Cy_DMA_Descriptor_SetDstAddress(&WSDescriptors[i], (void *)&WS_SPI_HW->TX_FIFO_WR);
+        Cy_DMA_Descriptor_SetXloopDataCount(&WSDescriptors[i],256); // the last
+        Cy_DMA_Descriptor_SetNextDescriptor(&WSDescriptors[i],&WSDescriptors[i+1]);
+    }
     
-    /* Initialize descriptor */
-    Cy_DMA_Descriptor_Init(&WS_DMA_Descriptor_1, &WS_DMA_Descriptor_1_config);
-     
-    /* Set source and destination for descriptor 1 */
-    Cy_DMA_Descriptor_SetSrcAddress(&WS_DMA_Descriptor_1, (uint8_t *)WS_frameBuffer);
-    Cy_DMA_Descriptor_SetDstAddress(&WS_DMA_Descriptor_1, (void *)&WS_SPI_HW->TX_FIFO_WR);
-    Cy_DMA_Descriptor_SetXloopDataCount(&WS_DMA_Descriptor_1,sizeof(WS_frameBuffer));
+    // The last one needs a bit of change
+    Cy_DMA_Descriptor_SetXloopDataCount(&WSDescriptors[WS_NUM_DESCRIPTORS-1],sizeof(WS_frameBuffer)-256*(WS_NUM_DESCRIPTORS-1)); // the last
+    Cy_DMA_Descriptor_SetNextDescriptor(&WSDescriptors[WS_NUM_DESCRIPTORS-1],0);
+    Cy_DMA_Descriptor_SetChannelState(&WSDescriptors[WS_NUM_DESCRIPTORS-1],CY_DMA_CHANNEL_DISABLED);
+ 
     
      /* Initialize and enable the interrupt from WS_DMA */
     Cy_SysInt_Init(&WS_DMA_INT_cfg, &WS_DMAComplete);
@@ -39,11 +74,12 @@ static void ConfigureWS_DMA(void)
     Cy_DMA_Enable(WS_DMA_HW);    
 }
 
-void triggerWS_DMA()
+// Function: WS_DMATrigger
+// This function sets up the channel... then enables it to dump the frameBuffer to pixels
+void WS_DMATrigger()
 {
-        /* Initialize the DMA channel */
     cy_stc_dma_channel_config_t channelConfig;	
-    channelConfig.descriptor  = &WS_DMA_Descriptor_1;
+    channelConfig.descriptor  = &WSDescriptors[0];
     channelConfig.preemptable = WS_DMA_PREEMPTABLE;
     channelConfig.priority    = WS_DMA_PRIORITY;
     channelConfig.enable      = false;
@@ -51,19 +87,17 @@ void triggerWS_DMA()
     Cy_DMA_Channel_Enable(WS_DMA_HW,WS_DMA_DW_CHANNEL);
 }
 
+// Function: WS_SysTickHandler
+// This function is called by the systick timer.  It counts up to 33 and then calls the update
+// It also makes sure that the channel is inactive
 void WS_SysTickHandler()
 {
     static int count=0;
-    
-    cy_en_dma_intr_cause_t dmstatus = Cy_DMA_Channel_GetStatus(WS_DMA_HW,WS_DMA_DW_CHANNEL);
-    
-    //if(count>29)
-    if(Cy_DMA_Channel_GetStatus(WS_DMA_HW,WS_DMA_DW_CHANNEL) == CY_DMA_INTR_CAUSE_ACTIVE_CH_DISABLED && count>29)
+    if((Cy_DMA_Channel_GetStatus(WS_DMA_HW,WS_DMA_DW_CHANNEL) & CY_DMA_INTR_CAUSE_COMPLETION) && count++>32)
     {
-        triggerWS_DMA();
+        WS_DMATrigger();
         count = 0;
     }
-    count = count + 1;
 }
 
 // Function: convert3Code
@@ -119,12 +153,11 @@ void WS_setRGB(int led,uint8_t red, uint8_t green, uint8_t blue)
 
 // Function WS_setRange
 // Sets all of the pixels from start to end with the red,green,blue value
-
 void WS_setRange(int start, int end, uint8_t red,uint8_t green ,uint8_t blue)
 {
     CY_ASSERT(start >= 0);
     CY_ASSERT(start < end);
-    CY_ASSERT(end <= WS_NUM_LEDS-1);
+    CY_ASSERT(end <= WS_NUM_PIXELS-1);
    
     WS_setRGB(start,red,green,blue);
     for(int i=1;i<=end-start;i++)
@@ -133,7 +166,8 @@ void WS_setRange(int start, int end, uint8_t red,uint8_t green ,uint8_t blue)
         &WS_frameBuffer[start*WS_BYTES_PER_PIXEL+WS_ZOFFSET],WS_BYTES_PER_PIXEL);
     }
 }
-
+// Function: WS_runTest
+// This function just runs test-asserts against the pixel calculation functions
 void WS_runTest()
 {
     printf("Size of WS_frameBuffer = %d\n",sizeof(WS_frameBuffer));
@@ -149,7 +183,7 @@ void WS_runTest()
     CY_ASSERT(WS_convert3Code(0xFF) == 0b00000000110110110110110110110110);
     
  
-    CY_ASSERT(WS_NUM_LEDS>=3); // we are goign to test 3 locations
+    CY_ASSERT(WS_NUM_PIXELS>=3); // we are goign to test 3 locations
     // Test the WS_setRGB
     WS_setRGB(0,0x80,0,0xFF);
     
@@ -268,7 +302,7 @@ void WS_runTest()
 // Initializes the RGB frame buffer to RGBRGBRGB...RGB
 void WS_initMixColorRGB()
 {
-    for(int i=0;i<WS_NUM_LEDS;i++)
+    for(int i=0;i<WS_NUM_PIXELS;i++)
     {
         switch(i%3)
         {
@@ -285,14 +319,16 @@ void WS_initMixColorRGB()
     }
 }
 
+// Function: WS_Start
+// This function intiaizlies everything... 
 void WS_Start()
 {
     WS_runTest();
     WS_frameBuffer[0] = 0x00;
-    WS_setRange(0,WS_NUM_LEDS-1,0,0,0); // Initialize everything OFF
+    WS_setRange(0,WS_NUM_PIXELS-1,0,0,0); // Initialize everything OFF
     Cy_SCB_SPI_Init(WS_SPI_HW, &WS_SPI_config, &WS_SPI_context);
     Cy_SCB_SPI_Enable(WS_SPI_HW);
-    ConfigureWS_DMA();
+    WS_DMAConfigure();
 }
 
 int main(void)
@@ -306,8 +342,7 @@ int main(void)
     
     Cy_SysTick_Init(CY_SYSTICK_CLOCK_SOURCE_CLK_IMO,8000);
     Cy_SysTick_Enable();
-    Cy_SysTick_SetCallback(0,WS_SysTickHandler);
- 
+  
     for(;;)
     {
         char c=getchar();
@@ -315,60 +350,54 @@ int main(void)
         {        
             case 'u':
                 printf("Enable auto DMA updating\n");
+                WS_DMATrigger();
                 Cy_SysTick_SetCallback(0,WS_SysTickHandler);
+                
             break;
-            
             case 'U':
                 printf("Disable auto DMA updating\n");
                 Cy_SysTick_SetCallback(0,0);
             break;
-                
             case 't':
                 printf("Trigger DMA\n");
-                triggerWS_DMA();
-            break;    
-            
+                WS_DMATrigger();
+            break;        
             case 'r':
                 WS_setRGB(0,0xFF,0,0);
                 printf("Set LED0 Red\n");
                 break;
-
-            case 'g':
+           case 'g':
                 WS_setRGB(0,0,0xFF,0);
                 printf("Set LED0 Green\n");
                 break;            
             case 'O':
-                WS_setRange(0,WS_NUM_LEDS-1,0,0,0);
+                WS_setRange(0,WS_NUM_PIXELS-1,0,0,0);
                 printf("Turn off all LEDs\n");
                 break;
             case 'o':
-                WS_setRange(0,WS_NUM_LEDS-1,0xFF,0xFF,0xFF);
+                WS_setRange(0,WS_NUM_PIXELS-1,0xFF,0xFF,0xFF);
                 printf("Turn on all LEDs\n");
                 break;
             case 'b':
                 WS_setRGB(0,0,0,0xFF);
                 printf("Set LED0 Blue\n");
                 break;        
-                
             case 'R':
-                WS_setRange(0,WS_NUM_LEDS-1,0x80,0,0);
+                WS_setRange(0,WS_NUM_PIXELS-1,0x80,0,0);
                 printf("Turn on all LEDs RED\n");
                 break;
-            
             case 'G':
-                WS_setRange(0,WS_NUM_LEDS-1,0,0x80,0);
+                WS_setRange(0,WS_NUM_PIXELS-1,0,0x80,0);
                 printf("Turn on all LEDs Green\n");
                 break;
             case 'B':
-                WS_setRange(0,WS_NUM_LEDS-1,0,0,0x80);
+                WS_setRange(0,WS_NUM_PIXELS-1,0,0,0x80);
                 printf("Turn on all LEDs Blue\n");
-                break;
-                
+                break;     
             case 'a':
                 WS_initMixColorRGB();
                 printf("Turn on all LEDs RGB Pattern\n");
                 break;
-                
             case '?':
                 printf("u\tEnable Auto Update of LEDs\n");
                 printf("U\tDisable Auto Update of LEDs\n");
